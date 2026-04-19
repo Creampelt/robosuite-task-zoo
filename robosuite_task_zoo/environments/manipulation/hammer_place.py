@@ -12,6 +12,7 @@ from robosuite.utils.placement_samplers import UniformRandomSampler, SequentialC
 from robosuite.utils.observables import Observable, sensor
 from robosuite.utils.mjcf_utils import CustomMaterial, array_to_string, find_elements, add_material
 from robosuite.utils.buffers import RingBuffer
+from robosuite.utils.binding_utils import MjSimWarp
 import robosuite.utils.transform_utils as T
 
 from robosuite_task_zoo.models.hammer_place import CabinetObject
@@ -44,7 +45,9 @@ class HammerPlaceEnv(SingleArmEnv):
         camera_heights=256,
         camera_widths=256,
         camera_depths=False,
-        contact_threshold=2.0
+        contact_threshold=2.0,
+        use_warp: bool = False,
+        num_envs: int = 1,
     ):
         # settings for table top (hardcoded since it's not an essential part of the environment)
         self.table_full_size = (0.8, 0.8, 0.05)
@@ -95,6 +98,8 @@ class HammerPlaceEnv(SingleArmEnv):
             camera_heights=camera_heights,
             camera_widths=camera_widths,
             camera_depths=camera_depths,
+            use_warp=use_warp,
+            num_envs=num_envs,
         )
 
     def reward(self, action=None):
@@ -352,8 +357,13 @@ class HammerPlaceEnv(SingleArmEnv):
 
         @sensor(modality="object")
         def world_pose_in_gripper(obs_cache):
-            return T.pose_inv(T.pose2mat((obs_cache[f"{pf}eef_pos"], obs_cache[f"{pf}eef_quat"]))) if\
-                f"{pf}eef_pos" in obs_cache and f"{pf}eef_quat" in obs_cache else np.eye(4)
+            if f"{pf}eef_pos" not in obs_cache or f"{pf}eef_quat" not in obs_cache:
+                return np.eye(4)
+            eef_pos = obs_cache[f"{pf}eef_pos"]
+            eef_quat = obs_cache[f"{pf}eef_quat"]
+            if isinstance(self.sim, MjSimWarp):
+                return T.pose_inv_torch(T.pose2mat_torch(eef_pos, eef_quat))
+            return T.pose_inv(T.pose2mat((eef_pos, eef_quat)))
 
         sensors.append(world_pose_in_gripper)
         names.append("world_pose_in_gripper")
@@ -366,10 +376,19 @@ class HammerPlaceEnv(SingleArmEnv):
             
         @sensor(modality=modality)
         def gripper_contact(obs_cache):
+            if isinstance(self.sim, MjSimWarp):
+                # Warp path has no force-sensor wiring; emit a (N, 1) zero
+                # tensor so the obs-modality concat has consistent ndim
+                # across all sensors in the group.
+                import torch
+                return torch.zeros(self.num_envs, 1, dtype=torch.float32, device="cuda")
             return self._has_gripper_contact
 
         @sensor(modality=modality)
         def force_norm(obs_cache):
+            if isinstance(self.sim, MjSimWarp):
+                import torch
+                return torch.zeros(self.num_envs, 1, dtype=torch.float32, device="cuda")
             return np.linalg.norm(self.robots[0].ee_force - self.ee_force_bias)
 
         sensors += [gripper_contact, force_norm]
