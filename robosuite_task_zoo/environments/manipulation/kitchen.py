@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from collections import OrderedDict
 import numpy as np
 from copy import deepcopy
@@ -580,7 +582,7 @@ class KitchenEnv(SingleArmEnv):
     def _pre_action(self, action, policy_step=False):
         super()._pre_action(action, policy_step=policy_step)
 
-        # Force-torque sensors are not plumbed under warp — see hammer_place.py
+        # Force-torque sensors are not plumbed under warp -- see hammer_place.py
         # for context. Skip the history bookkeeping entirely.
         if isinstance(self.sim, MjSimWarp):
             return

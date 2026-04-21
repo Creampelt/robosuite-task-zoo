@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from collections import OrderedDict
 import numpy as np
 from copy import deepcopy
@@ -380,9 +382,7 @@ class HammerPlaceEnv(SingleArmEnv):
         @sensor(modality=modality)
         def gripper_contact(obs_cache):
             if isinstance(self.sim, MjSimWarp):
-                # Warp path has no force-sensor wiring; emit a (N, 1) zero
-                # tensor so the obs-modality concat has consistent ndim
-                # across all sensors in the group.
+                # Warp: no force sensors -- (N, 1) zero to keep obs-modality concat rank consistent.
                 import torch
                 return torch.zeros(self.num_envs, 1, dtype=torch.float32, device="cuda")
             return self._has_gripper_contact
@@ -526,9 +526,7 @@ class HammerPlaceEnv(SingleArmEnv):
     def _pre_action(self, action, policy_step=False):
         super()._pre_action(action, policy_step=policy_step)
 
-        # Force-torque sensors are not plumbed under warp (ee_force / ee_torque
-        # slice a warp SoA that doesn't support numpy-style range indexing);
-        # skip the history bookkeeping entirely.
+        # Warp ee_force/ee_torque slices reject numpy range indexing; skip FT history.
         if isinstance(self.sim, MjSimWarp):
             return
 
