@@ -128,16 +128,19 @@ class HammerPlaceEnv(SingleArmEnv):
         Returns:
             float: reward value
         """
-        reward = 0.
+        success = self._check_success()
 
-        # sparse completion reward
-        if self._check_success():
-            reward = 1.0
+        # Warp path: per-env reward tensor. CPU path: scalar.
+        import torch
+        if isinstance(success, torch.Tensor):
+            reward = success.float()
+            if self.reward_scale is not None:
+                reward = reward * (self.reward_scale / 1.0)
+            return reward
 
-        # Scale reward if requested
+        reward = 1.0 if success else 0.0
         if self.reward_scale is not None:
             reward *= self.reward_scale / 1.0
-
         return reward
 
     def _load_model(self):
@@ -509,11 +512,13 @@ class HammerPlaceEnv(SingleArmEnv):
         if self.action_dim == 4:
             action = np.array(action)
             action = np.concatenate((action[:3], action[-1:]), axis=-1)
-        
+
         self._recent_force_torque = []
         obs, reward, done, info = super().step(action)
-        info["history_ft"] = np.clip(np.copy(self._history_force_torque.buf), a_min=None, a_max=2)
-        info["recent_ft"] = np.array(self._recent_force_torque)
+        # force-torque bookkeeping is disabled under warp (see _pre_action)
+        if not isinstance(self.sim, MjSimWarp):
+            info["history_ft"] = np.clip(np.copy(self._history_force_torque.buf), a_min=None, a_max=2)
+            info["recent_ft"] = np.array(self._recent_force_torque)
         done = self._check_success()
         return obs, reward, done, info
         
@@ -521,17 +526,26 @@ class HammerPlaceEnv(SingleArmEnv):
     def _pre_action(self, action, policy_step=False):
         super()._pre_action(action, policy_step=policy_step)
 
+        # Force-torque sensors are not plumbed under warp (ee_force / ee_torque
+        # slice a warp SoA that doesn't support numpy-style range indexing);
+        # skip the history bookkeeping entirely.
+        if isinstance(self.sim, MjSimWarp):
+            return
+
         self._history_force_torque.push(np.hstack((self.robots[0].ee_force - self.ee_force_bias, self.robots[0].ee_torque - self.ee_torque_bias)))
         self._recent_force_torque.append(np.hstack((self.robots[0].ee_force - self.ee_force_bias, self.robots[0].ee_torque - self.ee_torque_bias)))
-        
+
     def _post_action(self, action):
         reward, done, info = super()._post_action(action)
 
         # print("Cabinet joint: " , self.sim.data.qpos[self.cabinet_qpos_addrs])
+        if isinstance(self.sim, MjSimWarp):
+            return reward, done, info
+
         if np.linalg.norm(self.ee_force_bias) == 0:
             self.ee_force_bias = self.robots[0].ee_force
             self.ee_torque_bias = self.robots[0].ee_torque
-            
+
         return reward, done, info
         
     @property
